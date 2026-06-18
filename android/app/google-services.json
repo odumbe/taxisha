@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "921297399960",
+    "project_id": "taxisha-prod",
+    "storage_bucket": "taxisha-prod.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:921297399960:android:e32d88af76bce0f94720ed",
+        "android_client_info": {
+          "package_name": "com.example.taxisha"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDEBx4Gu-uQE56I-DeWao4kdFaNw9HmVHo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
