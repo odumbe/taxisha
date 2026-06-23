@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
+import '../firebase_env.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -68,6 +69,15 @@ class AuthService {
   }
 
   Future<void> sendPasswordReset({required String email}) async {
-    await _auth.sendPasswordResetEmail(email: email);
+    final projectId = kUseProdFirebase ? 'taxisha-prod' : 'taxisha-staging';
+    await _auth.sendPasswordResetEmail(
+      email: email,
+      actionCodeSettings: ActionCodeSettings(
+        url: 'https://$projectId.firebaseapp.com/login',
+        handleCodeInApp: true,
+        androidPackageName: 'com.example.taxisha',
+        iOSBundleId: 'com.example.taxisha',
+      ),
+    );
   }
 }

@@ -57,6 +57,7 @@ class DefaultFirebaseOptions {
     appId: '1:257530260819:android:83ce2a8f75f4ef97c685a6',
     messagingSenderId: '257530260819',
     projectId: 'taxisha-staging',
+    databaseURL: 'https://taxisha-staging-default-rtdb.firebaseio.com',
     storageBucket: 'taxisha-staging.firebasestorage.app',
   );
 }

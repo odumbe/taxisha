@@ -4,22 +4,29 @@ service cloud.firestore {
 
     // Users collection — each user manages their own profile
     match /users/{userId} {
-      // Anyone can read basic user info (needed for ride matching, ratings)
       allow read: if request.auth != null;
-
-      // Users can write only their own document
-      // Drivers: can update their own profile (but verificationStatus is admin-only)
-      // Admin: managed separately below
       allow create: if request.auth != null && request.auth.uid == userId;
       allow update: if request.auth != null
         && request.auth.uid == userId
-        && (!request.resource.data.keys().hasAny(['verificationStatus']));
-      allow delete: if false; // users are soft-deleted or disabled
+        && !request.resource.data.diff(resource.data).affectedKeys()
+             .hasAny(['verificationStatus']);
+      allow delete: if false;
 
-      // Driver documents subcollection (PII — restricted)
       match /driverDocs/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
+    }
+
+    // RideRequests collection
+    match /rideRequests/{requestId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null
+        && (request.auth.uid == resource.data.passengerId
+            || request.resource.data.driverId == request.auth.uid
+            || (resource.data.status == 'pending'
+                && request.resource.data.rejectedBy.hasAny([request.auth.uid])));
+      allow delete: if false;
     }
 
     // Rides collection
@@ -62,13 +69,6 @@ service cloud.firestore {
         allow read, write: if request.auth != null
           && request.auth.uid == resource.data.userId;
       }
-    }
-
-    // Admin access — any user with role == 'admin' can manage all data
-    match /{document=**} {
-      allow read, write: if request.auth != null
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
   }
 }

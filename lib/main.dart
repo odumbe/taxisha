@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'firebase_env.dart';
@@ -9,9 +10,19 @@ void main() async {
   await Firebase.initializeApp(
     options: currentFirebaseOptions,
   );
-  await FirebaseAppCheck.instance.activate(
-    providerAndroid: const AndroidPlayIntegrityProvider(),
-  );
+  try {
+    await FirebaseAppCheck.instance.activate(
+      providerAndroid: kUseProdFirebase
+          ? const AndroidPlayIntegrityProvider()
+          : AndroidDebugProvider(
+              debugToken: kDebugMode
+                  ? 'F1B0A5C2-D8E3-4F67-9C0A-1B2C3D4E5F60'
+                  : null,
+            ),
+    );
+  } catch (_) {
+    // App Check not critical during development
+  }
   runApp(const TaxiShaApp());
 }
 

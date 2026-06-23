@@ -79,47 +79,91 @@ class _LoginScreenState extends State<LoginScreen> {
 
   void _showResetDialog() {
     final emailController = TextEditingController();
+    var sending = false;
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Reset password'),
-        content: TextField(
-          controller: emailController,
-          decoration: const InputDecoration(
-            labelText: 'Email',
-            hintText: 'Enter your email address',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Reset password'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: emailController,
+                decoration: const InputDecoration(
+                  labelText: 'Email',
+                  hintText: 'Enter your email address',
+                ),
+                keyboardType: TextInputType.emailAddress,
+              ),
+              if (sending) ...[
+                const SizedBox(height: 16),
+                const LinearProgressIndicator(),
+              ],
+            ],
           ),
-          keyboardType: TextInputType.emailAddress,
+          actions: [
+            TextButton(
+              onPressed: sending ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: sending
+                  ? null
+                  : () async {
+                      final email = emailController.text.trim();
+                      if (email.isEmpty || !email.contains('@')) return;
+                      setDialogState(() => sending = true);
+                      try {
+                        await _authService.sendPasswordReset(email: email);
+                        if (!ctx.mounted) return;
+                        Navigator.pop(ctx);
+                        if (!mounted) return;
+                        await showDialog(
+                          context: context,
+                          builder: (ctx2) => AlertDialog(
+                            title: const Icon(Icons.mark_email_read,
+                                size: 48, color: Colors.green),
+                            content: const Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text('Email sent!',
+                                    style: TextStyle(fontSize: 20)),
+                                SizedBox(height: 12),
+                                Text(
+                                  'Check your inbox for the password reset '
+                                  'email. Click the link to reset your '
+                                  'password, then sign in with your new '
+                                  'password here.',
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                            actions: [
+                              FilledButton(
+                                onPressed: () => Navigator.pop(ctx2),
+                                child: const Text('OK'),
+                              ),
+                            ],
+                          ),
+                        );
+                      } on FirebaseAuthException catch (e) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                              content: Text(
+                                  e.message ?? 'Failed to send reset email')),
+                        );
+                      } finally {
+                        if (ctx.mounted) {
+                          setDialogState(() => sending = false);
+                        }
+                      }
+                    },
+              child: const Text('Send'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final email = emailController.text.trim();
-              if (email.isEmpty || !email.contains('@')) return;
-              try {
-                await _authService.sendPasswordReset(email: email);
-                if (!ctx.mounted) return;
-                Navigator.pop(ctx);
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Password reset email sent. Check your inbox.'),
-                  ),
-                );
-              } on FirebaseAuthException catch (e) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(e.message ?? 'Failed to send reset email')),
-                );
-              }
-            },
-            child: const Text('Send'),
-          ),
-        ],
       ),
     );
   }
