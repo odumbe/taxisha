@@ -49,6 +49,12 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>GMSApiKey</key>
+	<string>YOUR_GOOGLE_MAPS_API_KEY</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>TaxiSha needs your location to find nearby rides and show you on the map.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>TaxiSha needs your location to track your ride in the background.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

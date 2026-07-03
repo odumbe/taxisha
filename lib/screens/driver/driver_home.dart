@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../models/user_model.dart';
 import '../../models/ride_request_model.dart';
 import '../../models/driver_route_model.dart';
@@ -7,6 +8,7 @@ import '../../services/driver_service.dart';
 import '../../services/ntsa_service.dart';
 import '../../services/auth_service.dart';
 import '../auth/login_screen.dart';
+import '../shared/location_picker_screen.dart';
 
 class DriverHome extends StatefulWidget {
   final AppUser appUser;
@@ -21,11 +23,11 @@ class _DriverHomeState extends State<DriverHome> {
   final AuthService _authService = AuthService();
   final DriverService _driverService = DriverService();
   final NTSAService _ntsaService = NTSAService();
-
   late bool _isOnline;
   late AppUser _appUser;
   DriverRoute? _driverRoute;
   bool _routeLoading = false;
+  bool _showMapView = false;
 
   @override
   void initState() {
@@ -187,58 +189,83 @@ class _DriverHomeState extends State<DriverHome> {
       );
     }
 
-    return Column(
-      children: [
-        _buildRouteCard(theme),
-        Expanded(
-          child: StreamBuilder<QuerySnapshot>(
-            stream: _driverService.getAvailableRideRequests(),
-            builder: (context, snapshot) {
-              if (snapshot.hasError) {
-                return Center(child: Text('Error: ${snapshot.error}'));
-              }
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final allDocs = snapshot.data?.docs ?? [];
-              final docs = allDocs.where((doc) {
-                final data = doc.data() as Map<String, dynamic>;
-                final rejectedBy = List<String>.from(data['rejectedBy'] ?? []);
-                return !rejectedBy.contains(_appUser.id);
-              }).toList();
-              if (docs.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.taxi_alert, size: 48, color: theme.colorScheme.outline),
-                      const SizedBox(height: 12),
-                      Text('No ride requests', style: theme.textTheme.titleMedium),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Waiting for passengers to request rides',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.outline,
+    return StreamBuilder<QuerySnapshot>(
+      stream: _driverService.getAvailableRideRequests(),
+      builder: (context, snapshot) {
+        bool isLoading = snapshot.connectionState == ConnectionState.waiting;
+        bool hasError = snapshot.hasError;
+        final allDocs = snapshot.data?.docs ?? [];
+        final docs = allDocs.where((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          final rejectedBy = List<String>.from(data['rejectedBy'] ?? []);
+          return !rejectedBy.contains(_appUser.id);
+        }).toList();
+        final requests = docs.map((doc) => RideRequest.fromMap(
+              doc.id,
+              doc.data() as Map<String, dynamic>,
+            )).toList();
+        final count = requests.length;
+
+        return Column(
+          children: [
+            _buildRouteCard(theme),
+            if (!isLoading && !hasError && count > 0)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Text('$count request${count == 1 ? '' : 's'}',
+                        style: theme.textTheme.bodySmall),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: () => setState(() => _showMapView = !_showMapView),
+                      icon: Icon(_showMapView ? Icons.list : Icons.map),
+                      label: Text(_showMapView ? 'List' : 'Map'),
+                    ),
+                  ],
+                ),
+              ),
+            Expanded(
+              child: () {
+                if (hasError) {
+                  return Center(child: Text('Error: ${snapshot.error}'));
+                }
+                if (isLoading) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (docs.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.taxi_alert, size: 48, color: theme.colorScheme.outline),
+                        const SizedBox(height: 12),
+                        Text('No ride requests', style: theme.textTheme.titleMedium),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Waiting for passengers to request rides',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                );
-              }
-              return ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                children: docs.map((doc) {
-                  final request = RideRequest.fromMap(
-                    doc.id,
-                    doc.data() as Map<String, dynamic>,
+                      ],
+                    ),
                   );
-                  return _buildRideRequestCard(request, theme);
-                }).toList(),
-              );
-            },
-          ),
-        ),
-      ],
+                }
+                if (_showMapView) {
+                  return _buildRequestsMap(theme, requests);
+                }
+                return ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  children: requests.map((request) {
+                    return _buildRideRequestCard(request, theme);
+                  }).toList(),
+                );
+              }(),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -407,6 +434,151 @@ class _DriverHomeState extends State<DriverHome> {
     );
   }
 
+  Widget _buildRequestsMap(ThemeData theme, List<RideRequest> requests) {
+    if (requests.every((r) => r.pickupLat == 0 && r.pickupLng == 0)) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.map_outlined, size: 48, color: theme.colorScheme.outline),
+            const SizedBox(height: 12),
+            Text('No map data available',
+                style: theme.textTheme.titleMedium),
+          ],
+        ),
+      );
+    }
+
+    double avgLat = 0, avgLng = 0;
+    int count = 0;
+    final markers = <Marker>{};
+    for (final r in requests) {
+      if (r.pickupLat != 0 || r.pickupLng != 0) {
+        avgLat += r.pickupLat;
+        avgLng += r.pickupLng;
+        count++;
+        markers.add(Marker(
+          markerId: MarkerId('pickup_${r.id}'),
+          position: LatLng(r.pickupLat, r.pickupLng),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+              BitmapDescriptor.hueAzure),
+          infoWindow: InfoWindow(
+            title: r.passengerName,
+            snippet: 'Ksh ${r.bidAmount.toStringAsFixed(0)} - ${r.pickup}',
+          ),
+          onTap: () => _showRequestDetail(r, theme),
+        ));
+      }
+      if (r.destLat != 0 || r.destLng != 0) {
+        markers.add(Marker(
+          markerId: MarkerId('dest_${r.id}'),
+          position: LatLng(r.destLat, r.destLng),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+              BitmapDescriptor.hueRed),
+          infoWindow: InfoWindow(
+            title: '${r.passengerName} (dest)',
+            snippet: r.destination,
+          ),
+        ));
+      }
+    }
+    if (count > 0) {
+      avgLat /= count;
+      avgLng /= count;
+    }
+
+    return Stack(
+      children: [
+        GoogleMap(
+          initialCameraPosition: CameraPosition(
+            target: LatLng(avgLat, avgLng),
+            zoom: 12,
+          ),
+          markers: markers,
+          myLocationEnabled: true,
+          myLocationButtonEnabled: true,
+          zoomControlsEnabled: false,
+          mapToolbarEnabled: false,
+        ),
+        Positioned(
+          top: 8,
+          left: 8,
+          right: 8,
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                '${requests.length} request${requests.length == 1 ? '' : 's'} nearby',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showRequestDetail(RideRequest request, ThemeData theme) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(request.passengerName,
+                style: theme.textTheme.titleLarge),
+            const SizedBox(height: 8),
+            Row(children: [
+              const Icon(Icons.trip_origin, size: 16),
+              const SizedBox(width: 8),
+              Expanded(child: Text(request.pickup)),
+            ]),
+            const SizedBox(height: 4),
+            Row(children: [
+              const Icon(Icons.location_on, size: 16, color: Colors.red),
+              const SizedBox(width: 8),
+              Expanded(child: Text(request.destination)),
+            ]),
+            const SizedBox(height: 8),
+            Text('Bid: Ksh ${request.bidAmount.toStringAsFixed(0)}',
+                style: theme.textTheme.titleMedium),
+            const SizedBox(height: 16),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _rejectRequest(request);
+                  },
+                  icon: const Icon(Icons.close),
+                  label: const Text('Reject'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red,
+                    side: const BorderSide(color: Colors.red),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _acceptRequest(request);
+                  },
+                  icon: const Icon(Icons.check),
+                  label: const Text('Accept'),
+                ),
+              ),
+            ]),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _formatTimeAgo(DateTime dateTime) {
     final diff = DateTime.now().difference(dateTime);
     if (diff.inMinutes < 1) return 'Just now';
@@ -424,10 +596,13 @@ class _DriverHomeState extends State<DriverHome> {
   }
 
   Future<DriverRoute?> _showRouteSetupDialog({DriverRoute? route}) async {
-    final pickupCtrl =
-        TextEditingController(text: route?.pickupArea ?? '');
-    final destCtrl =
-        TextEditingController(text: route?.destinationArea ?? '');
+    String pickupArea = route?.pickupArea ?? '';
+    double pickupLat = route?.pickupLat ?? 0.0;
+    double pickupLng = route?.pickupLng ?? 0.0;
+    String destArea = route?.destinationArea ?? '';
+    double destLat = route?.destLat ?? 0.0;
+    double destLng = route?.destLng ?? 0.0;
+
     final minBidCtrl = TextEditingController(
       text: route != null && route.minBid > 0
           ? route.minBid.toStringAsFixed(0)
@@ -441,100 +616,166 @@ class _DriverHomeState extends State<DriverHome> {
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(route != null ? 'Edit Your Route' : 'Set Your Route'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: pickupCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Pickup area',
-                  hintText: 'e.g. Nairobi CBD',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.trip_origin),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: destCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Destination area',
-                  hintText: 'e.g. Westlands',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.location_on),
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Divider(),
-              Text('Bid Range',
-                  style: Theme.of(context).textTheme.titleSmall),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: minBidCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Minimum (Ksh)',
-                        border: OutlineInputBorder(),
-                        prefixText: 'Ksh ',
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(route != null ? 'Edit Your Route' : 'Set Your Route'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                InkWell(
+                  onTap: () async {
+                    final loc = await Navigator.push<Map<String, dynamic>>(
+                      ctx,
+                      MaterialPageRoute(
+                        builder: (_) => LocationPickerScreen(
+                          title: 'Set pickup area',
+                          initialLocation: pickupLat != 0
+                              ? LatLng(pickupLat, pickupLng)
+                              : null,
+                        ),
                       ),
-                      keyboardType: TextInputType.number,
+                    );
+                    if (loc != null) {
+                      setDialogState(() {
+                        pickupArea = loc['address'] as String;
+                        pickupLat = loc['latitude'] as double;
+                        pickupLng = loc['longitude'] as double;
+                      });
+                    }
+                  },
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Pickup area',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.trip_origin),
+                      suffixIcon: Icon(Icons.map_outlined),
+                    ),
+                    child: Text(
+                      pickupArea.isNotEmpty
+                          ? pickupArea
+                          : 'Tap to select on map',
+                      style: TextStyle(
+                        color: pickupArea.isNotEmpty
+                            ? null
+                            : Theme.of(context).colorScheme.outline,
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: maxBidCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Maximum (Ksh)',
-                        border: OutlineInputBorder(),
-                        prefixText: 'Ksh ',
+                ),
+                const SizedBox(height: 12),
+                InkWell(
+                  onTap: () async {
+                    final loc = await Navigator.push<Map<String, dynamic>>(
+                      ctx,
+                      MaterialPageRoute(
+                        builder: (_) => LocationPickerScreen(
+                          title: 'Set destination area',
+                          initialLocation: destLat != 0
+                              ? LatLng(destLat, destLng)
+                              : null,
+                        ),
                       ),
-                      keyboardType: TextInputType.number,
+                    );
+                    if (loc != null) {
+                      setDialogState(() {
+                        destArea = loc['address'] as String;
+                        destLat = loc['latitude'] as double;
+                        destLng = loc['longitude'] as double;
+                      });
+                    }
+                  },
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Destination area',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.location_on),
+                      suffixIcon: Icon(Icons.map_outlined),
+                    ),
+                    child: Text(
+                      destArea.isNotEmpty ? destArea : 'Tap to select on map',
+                      style: TextStyle(
+                        color: destArea.isNotEmpty
+                            ? null
+                            : Theme.of(context).colorScheme.outline,
+                      ),
                     ),
                   ),
-                ],
-              ),
-            ],
+                ),
+                const SizedBox(height: 16),
+                const Divider(),
+                Text('Bid Range',
+                    style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: minBidCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Minimum (Ksh)',
+                          border: OutlineInputBorder(),
+                          prefixText: 'Ksh ',
+                        ),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: maxBidCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Maximum (Ksh)',
+                          border: OutlineInputBorder(),
+                          prefixText: 'Ksh ',
+                        ),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final minBid = double.tryParse(minBidCtrl.text) ?? 0;
+                final maxBid = double.tryParse(maxBidCtrl.text) ?? 0;
+                if (pickupArea.isEmpty || destArea.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Please fill in pickup and destination')),
+                  );
+                  return;
+                }
+                if (minBid <= 0 || maxBid <= 0 || maxBid < minBid) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text(
+                            'Set a valid bid range (min > 0, max >= min)')),
+                  );
+                  return;
+                }
+                Navigator.pop(ctx, {
+                  'pickupArea': pickupArea,
+                  'pickupLat': pickupLat,
+                  'pickupLng': pickupLng,
+                  'destinationArea': destArea,
+                  'destLat': destLat,
+                  'destLng': destLng,
+                  'minBid': minBid,
+                  'maxBid': maxBid,
+                });
+              },
+              child: const Text('Save Route'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final minBid = double.tryParse(minBidCtrl.text) ?? 0;
-              final maxBid = double.tryParse(maxBidCtrl.text) ?? 0;
-              if (pickupCtrl.text.isEmpty || destCtrl.text.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('Please fill in pickup and destination')),
-                );
-                return;
-              }
-              if (minBid <= 0 || maxBid <= 0 || maxBid < minBid) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text(
-                          'Set a valid bid range (min > 0, max >= min)')),
-                );
-                return;
-              }
-              Navigator.pop(ctx, {
-                'pickupArea': pickupCtrl.text,
-                'destinationArea': destCtrl.text,
-                'minBid': minBid,
-                'maxBid': maxBid,
-              });
-            },
-            child: const Text('Save Route'),
-          ),
-        ],
       ),
     );
 
@@ -543,7 +784,11 @@ class _DriverHomeState extends State<DriverHome> {
         driverId: _appUser.id,
         driverName: _appUser.name,
         pickupArea: result['pickupArea'],
+        pickupLat: result['pickupLat'] ?? 0.0,
+        pickupLng: result['pickupLng'] ?? 0.0,
         destinationArea: result['destinationArea'],
+        destLat: result['destLat'] ?? 0.0,
+        destLng: result['destLng'] ?? 0.0,
         minBid: result['minBid'],
         maxBid: result['maxBid'],
         isActive: true,

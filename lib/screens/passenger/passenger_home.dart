@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../services/auth_service.dart';
 import '../../services/passenger_service.dart';
 import '../../models/ride_request_model.dart';
+import '../../screens/shared/location_picker_screen.dart';
 import '../auth/login_screen.dart';
 
 class PassengerHome extends StatefulWidget {
@@ -13,14 +15,19 @@ class PassengerHome extends StatefulWidget {
 
 class _PassengerHomeState extends State<PassengerHome> {
   int _currentIndex = 0;
-  final _pickupController = TextEditingController();
-  final _destinationController = TextEditingController();
   final _bidController = TextEditingController();
   final _passengerService = PassengerService();
   String? _passengerName;
   String? _passengerPhone;
   String? _passengerEmail;
   bool _isSubmitting = false;
+
+  String _pickupAddress = '';
+  double _pickupLat = 0.0;
+  double _pickupLng = 0.0;
+  String _destinationAddress = '';
+  double _destLat = 0.0;
+  double _destLng = 0.0;
 
   @override
   void initState() {
@@ -43,24 +50,50 @@ class _PassengerHomeState extends State<PassengerHome> {
 
   @override
   void dispose() {
-    _pickupController.dispose();
-    _destinationController.dispose();
     _bidController.dispose();
     super.dispose();
   }
 
-  Future<void> _submitRideRequest() async {
-    final pickup = _pickupController.text.trim();
-    final destination = _destinationController.text.trim();
-    final bidText = _bidController.text.trim();
+  Future<void> _pickLocation({required bool isPickup}) async {
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(
+          title: isPickup ? 'Set pickup location' : 'Set destination',
+          initialLocation: isPickup && _pickupLat != 0
+              ? LatLng(_pickupLat, _pickupLng)
+              : !isPickup && _destLat != 0
+                  ? LatLng(_destLat, _destLng)
+                  : null,
+        ),
+      ),
+    );
 
-    if (pickup.isEmpty || destination.isEmpty || bidText.isEmpty) {
+    if (result != null && mounted) {
+      setState(() {
+        if (isPickup) {
+          _pickupAddress = result['address'] as String;
+          _pickupLat = result['latitude'] as double;
+          _pickupLng = result['longitude'] as double;
+        } else {
+          _destinationAddress = result['address'] as String;
+          _destLat = result['latitude'] as double;
+          _destLng = result['longitude'] as double;
+        }
+      });
+    }
+  }
+
+  Future<void> _submitRideRequest() async {
+    if (_pickupAddress.isEmpty ||
+        _destinationAddress.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill in all fields')),
+        const SnackBar(content: Text('Please set pickup and destination')),
       );
       return;
     }
 
+    final bidText = _bidController.text.trim();
     final bid = double.tryParse(bidText);
     if (bid == null || bid <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -75,13 +108,25 @@ class _PassengerHomeState extends State<PassengerHome> {
       await _passengerService.createRideRequest(
         passengerName: _passengerName ?? '',
         passengerPhone: _passengerPhone ?? '',
-        pickup: pickup,
-        destination: destination,
+        pickup: _pickupAddress,
+        pickupLat: _pickupLat,
+        pickupLng: _pickupLng,
+        destination: _destinationAddress,
+        destLat: _destLat,
+        destLng: _destLng,
         bidAmount: bid,
       );
-      _pickupController.clear();
-      _destinationController.clear();
-      _bidController.clear();
+      if (mounted) {
+        setState(() {
+          _pickupAddress = '';
+          _pickupLat = 0;
+          _pickupLng = 0;
+          _destinationAddress = '';
+          _destLat = 0;
+          _destLng = 0;
+          _bidController.clear();
+        });
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -185,21 +230,65 @@ class _PassengerHomeState extends State<PassengerHome> {
                   Text('Where are you going?',
                       style: theme.textTheme.headlineSmall),
                   const SizedBox(height: 24),
-                  TextField(
-                    controller: _pickupController,
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.trip_origin),
-                      labelText: 'Pickup location',
-                      border: OutlineInputBorder(),
+                  InkWell(
+                    onTap: () => _pickLocation(isPickup: true),
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.trip_origin),
+                        labelText: 'Pickup location',
+                        border: const OutlineInputBorder(),
+                        suffixIcon: _pickupAddress.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () => setState(() {
+                                      _pickupAddress = '';
+                                      _pickupLat = 0;
+                                      _pickupLng = 0;
+                                    }),
+                              )
+                            : const Icon(Icons.map_outlined),
+                      ),
+                      child: Text(
+                        _pickupAddress.isNotEmpty
+                            ? _pickupAddress
+                            : 'Tap to select on map',
+                        style: TextStyle(
+                          color: _pickupAddress.isNotEmpty
+                              ? null
+                              : theme.colorScheme.outline,
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: _destinationController,
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.location_on),
-                      labelText: 'Destination',
-                      border: OutlineInputBorder(),
+                  InkWell(
+                    onTap: () => _pickLocation(isPickup: false),
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.location_on),
+                        labelText: 'Destination',
+                        border: const OutlineInputBorder(),
+                        suffixIcon: _destinationAddress.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () => setState(() {
+                                      _destinationAddress = '';
+                                      _destLat = 0;
+                                      _destLng = 0;
+                                    }),
+                              )
+                            : const Icon(Icons.map_outlined),
+                      ),
+                      child: Text(
+                        _destinationAddress.isNotEmpty
+                            ? _destinationAddress
+                            : 'Tap to select on map',
+                        style: TextStyle(
+                          color: _destinationAddress.isNotEmpty
+                              ? null
+                              : theme.colorScheme.outline,
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -289,6 +378,48 @@ class _PassengerHomeState extends State<PassengerHome> {
                         ?.copyWith(color: theme.colorScheme.outline),
                     textAlign: TextAlign.center,
                   ),
+                  if (!isPending && request.pickupLat != 0) ...[
+                    const Divider(height: 24),
+                      SizedBox(
+                        height: 180,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: IgnorePointer(
+                            child: GoogleMap(
+                              initialCameraPosition: CameraPosition(
+                                target: LatLng(
+                                  (request.pickupLat + request.destLat) / 2,
+                                  (request.pickupLng + request.destLng) / 2,
+                                ),
+                                zoom: 13,
+                              ),
+                              markers: {
+                                Marker(
+                                  markerId: const MarkerId('pickup'),
+                                  position: LatLng(
+                                      request.pickupLat, request.pickupLng),
+                                  icon: BitmapDescriptor.defaultMarkerWithHue(
+                                      BitmapDescriptor.hueGreen),
+                                  infoWindow:
+                                      const InfoWindow(title: 'Pickup'),
+                                ),
+                                Marker(
+                                  markerId: const MarkerId('destination'),
+                                  position: LatLng(
+                                      request.destLat, request.destLng),
+                                  icon: BitmapDescriptor.defaultMarkerWithHue(
+                                      BitmapDescriptor.hueRed),
+                                  infoWindow:
+                                      const InfoWindow(title: 'Destination'),
+                                ),
+                              },
+                              zoomControlsEnabled: false,
+                              myLocationEnabled: false,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                   const Divider(height: 32),
                   _buildDetailRow(
                       Icons.trip_origin, 'Pickup', request.pickup),

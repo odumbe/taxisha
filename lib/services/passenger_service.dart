@@ -13,6 +13,10 @@ class PassengerService {
     required String pickup,
     required String destination,
     required double bidAmount,
+    double pickupLat = 0.0,
+    double pickupLng = 0.0,
+    double destLat = 0.0,
+    double destLng = 0.0,
   }) async {
     final uid = _userId;
     if (uid == null) throw Exception('Not authenticated');
@@ -24,7 +28,11 @@ class PassengerService {
       passengerName: passengerName,
       passengerPhone: passengerPhone,
       pickup: pickup,
+      pickupLat: pickupLat,
+      pickupLng: pickupLng,
       destination: destination,
+      destLat: destLat,
+      destLng: destLng,
       bidAmount: bidAmount,
     );
     await docRef.set(request.toMap());
